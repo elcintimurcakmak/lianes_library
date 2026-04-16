@@ -8,25 +8,41 @@ import time
 
 def load_data(file_name):
     if os.path.exists(file_name):
-        return pd.read_csv(file_name)
+        df = pd.read_csv(file_name)
+
+        if file_name == "books.csv":
+            required = ["id", "title", "author", "genre", "isbn", "status", "rating"]
+        elif file_name == "friends.csv":
+            required = ["id", "name", "phone", "email"]
+        elif file_name == "loans.csv":
+            required = ["id", "book_id", "friend_id", "loan_date", "return_date"]
+        elif file_name == "activity_log.csv":
+            required = ["action_type", "book_title", "borrower_name", "action_date"]
+        else:
+            required = []
+
+        for col in required:
+            if col not in df.columns:
+                df[col] = None
+
+        return df
+
     return pd.DataFrame()
 
+
 def initialize_files():
-    if not os.path.exists("books.csv"):
-        df = pd.DataFrame(columns=["id", "title", "author", "genre", "isbn", "status", "rating"])
-        save_data(df, "books.csv")
-    
-    if not os.path.exists("friends.csv"):
-        df = pd.DataFrame(columns=["id", "name", "phone", "email"])
-        save_data(df, "friends.csv")
-    
-    if not os.path.exists("loans.csv"):
-        df = pd.DataFrame(columns=["id", "book_id", "friend_id", "loan_date", "return_date"])
-        save_data(df, "loans.csv")
-    
-    if not os.path.exists("activity_log.csv"):
-        df = pd.DataFrame(columns=["action_type", "book_title", "borrower_name", "action_date"])
-        save_data(df, "activity_log.csv")
+    files_config = {
+        "books.csv": ["id", "title", "author", "genre", "isbn", "status", "rating"],
+        "friends.csv": ["id", "name", "phone", "email"],
+        "loans.csv": ["id", "book_id", "friend_id", "loan_date", "return_date"],
+        "activity_log.csv": ["action_type", "book_title", "borrower_name", "action_date"]
+    }
+
+    for file_name, columns in files_config.items():
+        if not os.path.exists(file_name):
+            df = pd.DataFrame(columns=columns)
+            save_data(df, file_name)
+
 
 initialize_files()
 
