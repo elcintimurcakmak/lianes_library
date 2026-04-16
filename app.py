@@ -16,7 +16,7 @@ def get_base64_of_bin_file(bin_file):
     except FileNotFoundError:
         return None
 
-img_path = "/Users/elcintimurcakmak/dumps/image_5.png"
+img_path = "image_5.png"
 
 if "page" not in st.session_state:
     st.session_state.page = "Welcome"
