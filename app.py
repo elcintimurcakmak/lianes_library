@@ -11,6 +11,25 @@ def load_data(file_name):
         return pd.read_csv(file_name)
     return pd.DataFrame()
 
+def initialize_files():
+    if not os.path.exists("books.csv"):
+        df = pd.DataFrame(columns=["id", "title", "author", "genre", "isbn", "status", "rating"])
+        save_data(df, "books.csv")
+    
+    if not os.path.exists("friends.csv"):
+        df = pd.DataFrame(columns=["id", "name", "phone", "email"])
+        save_data(df, "friends.csv")
+    
+    if not os.path.exists("loans.csv"):
+        df = pd.DataFrame(columns=["id", "book_id", "friend_id", "loan_date", "return_date"])
+        save_data(df, "loans.csv")
+    
+    if not os.path.exists("activity_log.csv"):
+        df = pd.DataFrame(columns=["action_type", "book_title", "borrower_name", "action_date"])
+        save_data(df, "activity_log.csv")
+
+initialize_files()
+
 def save_data(df, file_name):
     df.to_csv(file_name, index=False)
 
