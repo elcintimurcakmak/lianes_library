@@ -25,10 +25,18 @@ def load_data(file_name):
             if col not in df.columns:
                 df[col] = None
 
+        if file_name == "books.csv":
+            df["id"] = pd.to_numeric(df["id"], errors="coerce")
+        elif file_name == "friends.csv":
+            df["id"] = pd.to_numeric(df["id"], errors="coerce")
+        elif file_name == "loans.csv":
+            df["id"] = pd.to_numeric(df["id"], errors="coerce")
+            df["book_id"] = pd.to_numeric(df["book_id"], errors="coerce")
+            df["friend_id"] = pd.to_numeric(df["friend_id"], errors="coerce")
+
         return df
 
     return pd.DataFrame()
-
 
 def initialize_files():
     files_config = {
@@ -172,10 +180,38 @@ elif choice == "Dashboard":
     df_l = load_data("loans.csv")
 
     if not df_b.empty:
+
+        # 🔥 CRITICAL FIX (types + NaN)
+        df_b["id"] = pd.to_numeric(df_b["id"], errors="coerce")
+        df_f["id"] = pd.to_numeric(df_f["id"], errors="coerce")
+        df_l["book_id"] = pd.to_numeric(df_l["book_id"], errors="coerce")
+        df_l["friend_id"] = pd.to_numeric(df_l["friend_id"], errors="coerce")
+
+        # Drop NaN keys BEFORE merge
+        df_b = df_b.dropna(subset=["id"])
+        df_f = df_f.dropna(subset=["id"])
+        df_l = df_l.dropna(subset=["book_id", "friend_id"])
+
+        # Active loans
         active_loans = df_l[df_l["return_date"].isna() | (df_l["return_date"] == "")]
 
-        df = df_b.merge(active_loans[['book_id', 'friend_id']], left_on='id', right_on='book_id', how='left')
-        df = df.merge(df_f[['id', 'name']], left_on='friend_id', right_on='id', how='left', suffixes=('', '_friend'))
+        # 🔥 SAFE MERGE
+        df = pd.merge(
+            df_b,
+            active_loans[["book_id", "friend_id"]],
+            left_on="id",
+            right_on="book_id",
+            how="left"
+        )
+
+        df = pd.merge(
+            df,
+            df_f[["id", "name"]],
+            left_on="friend_id",
+            right_on="id",
+            how="left",
+            suffixes=("", "_friend")
+        )
 
         df = df[['isbn', 'title', 'author', 'name', 'status']]
         df.columns = ["ISBN", "TITLE", "AUTHOR", "BORROWER", "STATUS"]
