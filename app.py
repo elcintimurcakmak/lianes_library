@@ -1,10 +1,18 @@
 import streamlit as st
-import mysql.connector
 import pandas as pd
 import base64
 import os
 from datetime import date
 import time
+
+
+def load_data(file_name):
+    if os.path.exists(file_name):
+        return pd.read_csv(file_name)
+    return pd.DataFrame()
+
+def save_data(df, file_name):
+    df.to_csv(file_name, index=False)
 
 st.set_page_config(page_title="Liane's Library", page_icon="📚", layout="wide")
 
@@ -85,30 +93,17 @@ else:
         </style>
         """, unsafe_allow_html=True)
 
-def get_db_connection():
-    try:
-        conn = mysql.connector.connect(
-            host="localhost",
-            user="root",
-            password=st.secrets["mysql"]["password"],
-            database="lianes_library",
-            autocommit=True
-        )
-        return conn
-    except Exception as err:
-        st.error(f"❌ DB Connection Error: {err}")
-        return None
-
-def log_activity(book_title, borrower_name, action, b_id=None, f_id=None):
-    conn = get_db_connection()
-    if conn:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "INSERT INTO activity_log (book_title, borrower_name, action_type, book_id, friend_id) VALUES (%s,%s,%s,%s,%s)",
-                (book_title, borrower_name, action, b_id, f_id)
-            )
-        conn.close()
-
+def log_activity(book_title, borrower_name, action):
+    df_h = load_data("activity_log.csv")
+    new_log = {
+        "action_type": action,
+        "book_title": book_title,
+        "borrower_name": borrower_name,
+        "action_date": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    df_h = pd.concat([df_h, pd.DataFrame([new_log])], ignore_index=True)
+    save_data(df_h, "activity_log.csv")
+    
 if choice != "Welcome":
     with st.sidebar:
         st.title("📌 Navigation")
@@ -136,17 +131,19 @@ if choice == "Welcome":
 
 elif choice == "Dashboard":
     st.title(f"Liane's Personal Library — {choice}")
-    conn = get_db_connection()
-    if conn:
-        query = """
-            SELECT b.isbn AS ISBN, b.title AS TITLE, b.author AS AUTHOR, fr.name AS BORROWER, b.status AS STATUS
-            FROM books b
-            LEFT JOIN loans l ON b.id = l.book_id AND l.return_date IS NULL
-            LEFT JOIN friends fr ON l.friend_id = fr.id
-        """
-        df = pd.read_sql(query, conn)
-        conn.close()
-        
+    
+    df_b = load_data("books.csv")
+    df_f = load_data("friends.csv")
+    df_l = load_data("loans.csv")
+
+    if not df_b.empty:
+        active_loans = df_l[df_l["return_date"].isna() | (df_l["return_date"] == "")]
+
+        df = df_b.merge(active_loans[['book_id', 'friend_id']], left_on='id', right_on='book_id', how='left')
+        df = df.merge(df_f[['id', 'name']], left_on='friend_id', right_on='id', how='left', suffixes=('', '_friend'))
+
+        df = df[['isbn', 'title', 'author', 'name', 'status']]
+        df.columns = ["ISBN", "TITLE", "AUTHOR", "BORROWER", "STATUS"]
         df["BORROWER"] = df["BORROWER"].fillna("-")
         
         c1, c2, c3 = st.columns(3)
@@ -167,38 +164,50 @@ elif choice == "Dashboard":
         st.write("<br>", unsafe_allow_html=True)
         df["STATUS"] = df["STATUS"].apply(lambda x: "🏠 Available" if x == "Available" else "📤 Borrowed")
         st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        st.info("Your library is currently empty. Go to Books Management to add some books!")
 
 elif choice == "Books Management":
     st.title(f"Liane's Personal Library — {choice}")
     tab1, tab2 = st.tabs(["📝 View & Edit", "➕ Add Book"])
+    
     with tab2:
         with st.form("add_book_form", clear_on_submit=True):
             t, a, g, i = st.text_input("Title"), st.text_input("Author"), st.text_input("Genre"), st.text_input("ISBN")
             if st.form_submit_button("Add Book"):
                 if t:
-                    conn = get_db_connection()
-                    with conn.cursor() as cur:
-                        cur.execute("INSERT INTO books (title, author, genre, isbn) VALUES (%s,%s,%s,%s)", (t,a,g,i))
-                    conn.close()
+                    df_b = load_data("books.csv")
+                    new_id = int(df_b["id"].max() + 1) if not df_b.empty else 1
+                    new_book = pd.DataFrame([{
+                        "id": new_id, 
+                        "title": t, 
+                        "author": a, 
+                        "genre": g, 
+                        "isbn": i, 
+                        "status": "Available", 
+                        "rating": 0.0
+                    }])
+                    df_b = pd.concat([df_b, new_book], ignore_index=True)
+                    save_data(df_b, "books.csv")
                     log_activity(t, "System", "BOOK_ADDED") 
-                    st.success("Book added!"); time.sleep(1); st.rerun()
+                    st.success(f"'{t}' added to library!"); time.sleep(1); st.rerun()
+
     with tab1:
-        conn = get_db_connection()
-        if conn:
-            df_b = pd.read_sql("SELECT id, isbn, title, author, status FROM books", conn)
+        df_b = load_data("books.csv")
+        if not df_b.empty:
             df_b.insert(0, "Select", False)
             edited_df = st.data_editor(df_b, hide_index=True, key="book_editor", use_container_width=True, column_config={"id": None})
+            
             if st.button("🗑️ Delete Selected Book"):
                 to_delete = edited_df[edited_df["Select"] == True]
                 if not to_delete.empty:
-                    with get_db_connection() as conn:
-                        with conn.cursor() as cur:
-                            for _, row in to_delete.iterrows():
-                                cur.execute("DELETE FROM loans WHERE book_id = %s", (int(row['id']),))
-                                cur.execute("DELETE FROM books WHERE id = %s", (int(row['id']),))
-                                log_activity(row['title'], "System", "BOOK_DELETED")
-                    st.success("Deleted!"); time.sleep(1); st.rerun()
-            conn.close()
+                    df_b_new = edited_df[edited_df["Select"] == False].drop(columns=["Select"])
+                    save_data(df_b_new, "books.csv")
+                    for _, row in to_delete.iterrows():
+                        log_activity(row['title'], "System", "BOOK_DELETED")
+                    st.success("Deleted successfully!"); time.sleep(1); st.rerun()
+        else:
+            st.info("No books found.")
 
 elif choice == "Friends Management":
     st.title(f"Liane's Personal Library — {choice}")
@@ -208,73 +217,94 @@ elif choice == "Friends Management":
             n, p, e = st.text_input("Name"), st.text_input("Phone"), st.text_input("Email")
             if st.form_submit_button("Register"):
                 if n:
-                    conn = get_db_connection()
-                    with conn.cursor() as cur:
-                        cur.execute("INSERT INTO friends (name, phone, email) VALUES (%s,%s,%s)", (n,p,e))
-                    conn.close()
+                    df_f = load_data("friends.csv")
+                    new_id = int(df_f["id"].max() + 1) if not df_f.empty else 1
+                    new_friend = pd.DataFrame([{
+                        "id": new_id, 
+                        "name": n, 
+                        "phone": p, 
+                        "email": e
+                    }])
+                    df_f = pd.concat([df_f, new_friend], ignore_index=True)
+                    save_data(df_f, "friends.csv")
                     log_activity("-", n, "FRIEND_ADDED")
-                    st.success("Friend added!"); time.sleep(1); st.rerun()
+                    st.success(f"Friend '{n}' added!"); time.sleep(1); st.rerun()
     with tab1:
-        conn = get_db_connection()
-        if conn:
-            df_f = pd.read_sql("SELECT id, name, phone, email FROM friends", conn)
+        df_f = load_data("friends.csv")
+        if not df_f.empty:
             df_f.insert(0, "Select", False)
             edited_f = st.data_editor(df_f, hide_index=True, key="friend_editor", use_container_width=True, column_config={"id": None})
             if st.button("🗑️ Delete Selected Friends"):
                 to_del = edited_f[edited_f["Select"] == True]
                 if not to_del.empty:
-                    with get_db_connection() as conn:
-                        with conn.cursor() as cur:
-                            for _, row in to_del.iterrows():
-                                cur.execute("DELETE FROM loans WHERE friend_id = %s", (int(row['id']),))
-                                cur.execute("DELETE FROM friends WHERE id = %s", (int(row['id']),))
-                                log_activity("-", row['name'], "FRIEND_DELETED") 
+                    df_f_new = edited_f[edited_f["Select"] == False].drop(columns=["Select"])
+                    save_data(df_f_new, "friends.csv")
+                    for _, row in to_del.iterrows():
+                        log_activity("-", row['name'], "FRIEND_DELETED")
                     st.success("Friend deleted!"); time.sleep(1); st.rerun()
-            conn.close()
+        else:
+            st.info("No friends registered yet.")
 
 elif choice == "Issue Loan":
     st.title(f"Liane's Personal Library — {choice}")
-    conn = get_db_connection()
-    if conn:
-        books = pd.read_sql("SELECT id, title FROM books WHERE status='Available'", conn)
-        friends = pd.read_sql("SELECT id, name FROM friends", conn)
-        if not books.empty and not friends.empty:
+    df_b = load_data("books.csv")
+    df_f = load_data("friends.csv")
+    df_l = load_data("loans.csv")
+
+    if not df_b.empty and not df_f.empty:
+        available_books = df_b[df_b["status"] == "Available"]
+        if not available_books.empty:
             with st.form("loan_form"):
-                b_title = st.selectbox("Book", books["title"])
-                f_name = st.selectbox("Friend", friends["name"])
+                b_title = st.selectbox("Book", available_books["title"])
+                f_name = st.selectbox("Friend", df_f["name"])
                 if st.form_submit_button("Lend Book"):
-                    bid = int(books[books["title"] == b_title]["id"].values[0])
-                    fid = int(friends[friends["name"] == f_name]["id"].values[0])
-                    with conn.cursor() as cur:
-                        cur.execute("UPDATE books SET status='Borrowed' WHERE id=%s", (bid,))
-                        cur.execute("INSERT INTO loans (book_id, friend_id, loan_date) VALUES (%s,%s,%s)", (bid, fid, date.today()))
-                    log_activity(b_title, f_name, "LOAN_ISSUED", bid, fid)
-                    st.success("Success!"); time.sleep(1); st.rerun()
-        conn.close()
+                    bid = df_b[df_b["title"] == b_title]["id"].values[0]
+                    fid = df_f[df_f["name"] == f_name]["id"].values[0]
+                    df_b.loc[df_b["id"] == bid, "status"] = "Borrowed"
+                    save_data(df_b, "books.csv")
+                    new_loan = pd.DataFrame([{
+                        "id": int(df_l["id"].max() + 1) if not df_l.empty else 1,
+                        "book_id": bid,
+                        "friend_id": fid,
+                        "loan_date": date.today(),
+                        "return_date": None
+                    }])
+                    df_l = pd.concat([df_l, new_loan], ignore_index=True)
+                    save_data(df_l, "loans.csv")
+                    log_activity(b_title, f_name, "LOAN_ISSUED")
+                    st.success(f"Success! '{b_title}' lent to {f_name}."); time.sleep(1); st.rerun()
+        else:
+            st.warning("No books are currently available.")
+    else:
+        st.error("Please add books and friends first.")
 
 elif choice == "Return Book":
     st.title(f"Liane's Personal Library — {choice}")
-    conn = get_db_connection()
-    if conn:
-        df_l = pd.read_sql("""SELECT l.id, b.title, fr.name as borrower, b.id as bid, fr.id as fid 
-                              FROM loans l JOIN books b ON l.book_id = b.id JOIN friends fr ON l.friend_id = fr.id 
-                              WHERE l.return_date IS NULL""", conn)
-        if not df_l.empty:
-            target = st.selectbox("Book to return", df_l["title"])
+    df_b = load_data("books.csv")
+    df_l = load_data("loans.csv")
+    df_f = load_data("friends.csv")
+
+    if not df_l.empty:
+        active_loans = df_l[df_l["return_date"].isna() | (df_l["return_date"] == "")]
+        if not active_loans.empty:
+            loan_display = active_loans.merge(df_b[['id', 'title']], left_on='book_id', right_on='id')
+            loan_display = loan_display.merge(df_f[['id', 'name']], left_on='friend_id', right_on='id')
+            target_title = st.selectbox("Book to return", loan_display["title"])
             if st.button("Mark as Returned"):
-                row = df_l[df_l["title"]==target].iloc[0]
-                with conn.cursor() as cur:
-                    cur.execute("UPDATE loans SET return_date=%s WHERE id=%s", (date.today(), int(row['id'])))
-                    cur.execute("UPDATE books SET status='Available' WHERE id=%s", (int(row['bid']),))
-                log_activity(target, row['borrower'], "BOOK_RETURNED", int(row['bid']), int(row['fid']))
-                st.success("Returned!"); time.sleep(1); st.rerun()
-        conn.close()
+                selected_loan = loan_display[loan_display["title"] == target_title].iloc[0]
+                df_l.loc[df_l["id"] == selected_loan["id_x"], "return_date"] = date.today()
+                save_data(df_l, "loans.csv")
+                df_b.loc[df_b["id"] == selected_loan["book_id"], "status"] = "Available"
+                save_data(df_b, "books.csv")
+                log_activity(target_title, selected_loan["name"], "BOOK_RETURNED")
+                st.success(f"'{target_title}' is now back in the library!"); time.sleep(1); st.rerun()
+        else:
+            st.info("No books are currently borrowed.")
 
 elif choice == "Activity History":
     st.title(f"Liane's Personal Library — {choice}")
-    conn = get_db_connection()
-    if conn:
-        df_h = pd.read_sql("SELECT action_type, book_title, borrower_name, action_date FROM activity_log ORDER BY action_date DESC", conn)
+    df_h = load_data("activity_log.csv")
+    if not df_h.empty:
         action_map = {
             "BOOK_ADDED": "📥 Book Added", 
             "BOOK_DELETED": "🗑️ Book Deleted", 
@@ -284,5 +314,7 @@ elif choice == "Activity History":
             "BOOK_RETURNED": "📥 Book Returned"
         }
         df_h["action_type"] = df_h["action_type"].map(action_map).fillna(df_h["action_type"])
-        st.dataframe(df_h, use_container_width=True, hide_index=True)
-        conn.close()
+        df_display = df_h.sort_values("action_date", ascending=False)
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
+    else:
+        st.info("No activity recorded yet.")
